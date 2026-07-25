@@ -37,10 +37,39 @@ while True:
 
     if result.pose_landmarks:
         h, w, _ = frame.shape
-        for landmarks in result.pose_landmarks:
-            for lm in landmarks:
-                x, y = int(lm.x * w), int(lm.y * h)
-                cv2.circle(frame, (x, y), 4, (0, 255, 0), -1)
+        landmarks = result.pose_landmarks[0]  # first detected person
+
+        # MediaPipe landmark indices we care about
+        LEFT_SHOULDER = 11
+        RIGHT_SHOULDER = 12
+        LEFT_HIP = 23
+        RIGHT_HIP = 24
+        NOSE = 0
+        LEFT_ANKLE = 27
+        RIGHT_ANKLE = 28
+        LEFT_KNEE = 27
+        RIGHT_KNEE = 28
+
+        key_points = {
+            "nose": landmarks[NOSE],
+            "left_shoulder": landmarks[LEFT_SHOULDER],
+            "right_shoulder": landmarks[RIGHT_SHOULDER],
+            "left_hip": landmarks[LEFT_HIP],
+            "right_hip": landmarks[RIGHT_HIP],
+            "left_ankle": landmarks[LEFT_ANKLE],
+            "right_ankle": landmarks[RIGHT_ANKLE],
+            "right_knee" : landmarks[RIGHT_KNEE],
+            "left_knee" : landmarks[LEFT_KNEE],
+        }
+
+        for name, lm in key_points.items():
+            x, y = int(lm.x * w), int(lm.y * h)
+            cv2.circle(frame, (x, y), 6, (0, 255, 0), -1)
+            cv2.putText(frame, name, (x + 8, y - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
+
+        # print raw coordinates for now, so we can see the numbers
+        print(key_points["nose"])
 
     cv2.imshow("Fall Detection - Pose Test", frame)
 
