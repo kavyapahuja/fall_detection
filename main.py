@@ -1,7 +1,14 @@
 import cv2
 import mediapipe as mp
+import math 
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+
+def calculate_body_angle(shoulder_mid, hip_mid):
+    dx = hip_mid[0] - shoulder_mid[0]
+    dy= hip_mid[1] - shoulder_mid[1]
+    angle = math.degrees(math.atan2(abs(dy), abs(dx)))
+    return angle
 
 BaseOptions = python.BaseOptions
 PoseLandmarker = vision.PoseLandmarker
@@ -47,8 +54,8 @@ while True:
         NOSE = 0
         LEFT_ANKLE = 27
         RIGHT_ANKLE = 28
-        LEFT_KNEE = 27
-        RIGHT_KNEE = 28
+        LEFT_KNEE = 25
+        RIGHT_KNEE = 26
 
         key_points = {
             "nose": landmarks[NOSE],
@@ -60,15 +67,32 @@ while True:
             "right_ankle": landmarks[RIGHT_ANKLE],
             "right_knee" : landmarks[RIGHT_KNEE],
             "left_knee" : landmarks[LEFT_KNEE],
-        }
+            }
 
         for name, lm in key_points.items():
             x, y = int(lm.x * w), int(lm.y * h)
             cv2.circle(frame, (x, y), 6, (0, 255, 0), -1)
             cv2.putText(frame, name, (x + 8, y - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-        # print raw coordinates for now, so we can see the numbers
+            #calculating midpoints
+
+            shoulder_mid = (
+                (key_points["left_shoulder"].x + key_points["right_shoulder"].x) / 2,
+                (key_points["left_shoulder"].y + key_points["right_shoulder"].y) / 2
+            )
+
+            hip_mid = (
+                (key_points["left_hip"].x + key_points["right_hip"].x) / 2,
+                (key_points["left_hip"].y + key_points["right_hip"].y) / 2
+            )
+
+            body_angle = calculate_body_angle(shoulder_mid, hip_mid)
+
+            cv2.putText(frame, f"Body Angle: {int(body_angle)}", (30, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        print(f"Body angle: {body_angle:.1f}")
+
         print(key_points["nose"])
 
     cv2.imshow("Fall Detection - Pose Test", frame)
