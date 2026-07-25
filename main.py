@@ -29,6 +29,7 @@ if not cap.isOpened():
     exit()
 
 frame_timestamp = 0
+prev_torso_y = None
 
 while True:
     ret, frame = cap.read()
@@ -92,6 +93,21 @@ while True:
             cv2.putText(frame, f"Body Angle: {int(body_angle)}", (30, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         print(f"Body angle: {body_angle:.1f}")
+
+        #vertical speed drop type shi
+
+        torso_y = (shoulder_mid[1] + hip_mid[1]) / 2
+
+        if prev_torso_y is not None:
+            vertical_speed = torso_y - prev_torso_y
+        else:
+            vertical_speed = 0
+
+        prev_torso_y = torso_y
+
+        cv2.putText(frame, f"Speed: {vertical_speed:.4f}", (30, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        print(f"Vertical speed: {vertical_speed:.4f}")
 
         print(key_points["nose"])
 
