@@ -40,6 +40,8 @@ class SensorFallDetector:
                 self.gyro_peak_dps = float(match.group(2))
                 self.orientation_change_deg = float(match.group(3))
                 self.confidence = int(match.group(4))
+            return 
+        print(f"[unhandled line]: {line}")
 
     def reset(self):   
         """Call this after handling a confirmed fall, to listen for the next one."""
