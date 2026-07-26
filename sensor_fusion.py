@@ -27,7 +27,6 @@ class SensorFallDetector:
             return
 
         if line == "FALL_DETECTED":   #yay sth useful oops
-            self.fall_detected = True
             return
 
         if line.startswith("Impact="):
@@ -40,14 +39,15 @@ class SensorFallDetector:
                 self.gyro_peak_dps = float(match.group(2))
                 self.orientation_change_deg = float(match.group(3))
                 self.confidence = int(match.group(4))
+                self.fall_detected = True
             return 
         print(f"[unhandled line]: {line}")
 
     def reset(self):   
         """Call this after handling a confirmed fall, to listen for the next one."""
         self.fall_detected = False
-        self.confidence = 0
-
+        self.confidence = None
+ 
 
 if __name__ == "__main__":
     PORT = "COM9"  #placeholder anvita pls replace
