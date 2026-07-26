@@ -48,7 +48,7 @@ class SensorFallDetector:
 
 
 if __name__ == "__main__":
-    PORT = "/dev/tty.usbserial-XXXX"   #placeholder anvita pls replave
+    PORT = "COM9"  #placeholder anvita pls replace
     sensor = SensorFallDetector(PORT)
 
     print("Listening to Arduino... (Ctrl+C to stop)")
