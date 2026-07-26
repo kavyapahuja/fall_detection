@@ -22,7 +22,7 @@ while True:
         print("Error: Could not read frame")
         break
 
-    frame, vision_fall_like, body_angle = VISION_DETECTOR.process_frame.process
+    frame, vision_fall_like, body_angle = VISION_DETECTOR.process_frame(frame)
 
     sensor.check_for_fall()
 
@@ -38,10 +38,8 @@ while True:
             f"Impact: {sensor.impact_g}g\n"
             f"Vision confirms lying posture: {vision_fall_like}"
         )
-    send_telegram_alert(message)
-
-    sensor.reset()
-
+        send_telegram_alert(message)
+        sensor.reset()
 
     cv2.imshow("Fall Detection", frame)
 

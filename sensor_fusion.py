@@ -41,7 +41,6 @@ class SensorFallDetector:
                 self.confidence = int(match.group(4))
                 self.fall_detected = True
             return 
-        print(f"[unhandled line]: {line}")
 
     def reset(self):   
         """Call this after handling a confirmed fall, to listen for the next one."""
