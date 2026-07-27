@@ -38,10 +38,8 @@ while True:
             f"Impact: {sensor.impact_g}g\n"
             f"Vision confirms lying posture: {vision_fall_like}"
         )
-    send_telegram_alert(message)
-
-    sensor.reset()
-
+        send_telegram_alert(message)
+        sensor.reset()
 
     cv2.imshow("Fall Detection", frame)
 
