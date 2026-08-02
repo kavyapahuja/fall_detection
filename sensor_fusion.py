@@ -1,5 +1,5 @@
 import serial
-import re
+
 
 def connect_serial(port, baud=115200):
     return serial.Serial(port, baud, timeout=1)
@@ -8,57 +8,79 @@ def connect_serial(port, baud=115200):
 class SensorFallDetector:
     def __init__(self, port, baud=115200):
         self.ser = connect_serial(port, baud)
+
         self.fall_detected = False
         self.confidence = None
         self.impact_g = None
         self.gyro_peak_dps = None
         self.orientation_change_deg = None
 
-    def check_for_fall(self):   #check if arduino send sth new
-        if self.ser.in_waiting == 0: #if no data we do return bye bye
-            return  # nothing new to read right now
+    def check_for_fall(self):
+
+        if self.ser.in_waiting == 0:
+            return
 
         try:
-            line = self.ser.readline().decode('utf-8', errors='ignore').strip()
-        except Exception:
+            line = self.ser.readline().decode("utf-8", errors="ignore").strip()
+            print("Received:", line)       # Debug
+        except Exception as e:
+            print(e)
             return
 
-        if not line:  #if line comes back w nothing useful byebye
+        if line != "FALL_DETECTED":
             return
 
-        if line == "FALL_DETECTED":   #yay sth useful oops
-            return
+        try:
+            impact = self.ser.readline().decode().strip()
+            gyro = self.ser.readline().decode().strip()
+            orientation = self.ser.readline().decode().strip()
+            confidence = self.ser.readline().decode().strip()
 
-        if line.startswith("Impact="):
-            match = re.search(
-                r"Impact=([\d.]+)g \| GyroPeak=([\d.]+) dps \| OrientationChange=([\d.]+) deg \| Confidence=(\d+)%",
-                line
-            )
-            if match:
-                self.impact_g = float(match.group(1))
-                self.gyro_peak_dps = float(match.group(2))
-                self.orientation_change_deg = float(match.group(3))
-                self.confidence = int(match.group(4))
-                self.fall_detected = True
-            return 
+            print(impact)
+            print(gyro)
+            print(orientation)
+            print(confidence)
 
-    def reset(self):   
-        """Call this after handling a confirmed fall, to listen for the next one."""
+            self.impact_g = float(impact.split("=")[1])
+            self.gyro_peak_dps = float(gyro.split("=")[1])
+            self.orientation_change_deg = float(orientation.split("=")[1])
+            self.confidence = int(confidence.split("=")[1])
+
+            self.fall_detected = True
+
+        except Exception as e:
+            print("Parsing Error:", e)
+
+    def reset(self):
         self.fall_detected = False
         self.confidence = None
- 
+        self.impact_g = None
+        self.gyro_peak_dps = None
+        self.orientation_change_deg = None
+
 
 if __name__ == "__main__":
-    PORT = "COM9"  #placeholder anvita pls replace
+
+    PORT = "COM9"      # Change if needed
+
     sensor = SensorFallDetector(PORT)
 
-    print("Listening to Arduino... (Ctrl+C to stop)")
+    print("Listening to Arduino...")
 
     try:
         while True:
             sensor.check_for_fall()
+
             if sensor.fall_detected:
-                print(f"FALL DETECTED! Confidence: {sensor.confidence}%")
+                print("\n===== FALL DETECTED =====")
+                print(f"Impact: {sensor.impact_g} g")
+                print(f"Gyro Peak: {sensor.gyro_peak_dps} dps")
+                print(f"Orientation Change: {sensor.orientation_change_deg}°")
+                print(f"Confidence: {sensor.confidence}%")
+                print("=========================\n")
+
                 sensor.reset()
+
     except KeyboardInterrupt:
+        sensor.ser.close()
         print("Stopped.")
