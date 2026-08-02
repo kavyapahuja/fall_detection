@@ -1,4 +1,5 @@
 import serial
+import time
 
 
 def connect_serial(port, baud=115200):
@@ -9,6 +10,12 @@ class SensorFallDetector:
     def __init__(self, port, baud=115200):
         self.ser = connect_serial(port, baud)
 
+        # Give Arduino time to reset
+        time.sleep(2)
+
+        # Clear startup messages
+        self.ser.reset_input_buffer()
+
         self.fall_detected = False
         self.confidence = None
         self.impact_g = None
@@ -17,39 +24,57 @@ class SensorFallDetector:
 
     def check_for_fall(self):
 
-        if self.ser.in_waiting == 0:
-            return
+        while self.ser.in_waiting:
 
-        try:
-            line = self.ser.readline().decode("utf-8", errors="ignore").strip()
-            print("Received:", line)       # Debug
-        except Exception as e:
-            print(e)
-            return
+            try:
+                line = self.ser.readline().decode(
+                    "utf-8", errors="ignore"
+                ).strip()
 
-        if line != "FALL_DETECTED":
-            return
+                print("Received:", repr(line))
 
-        try:
-            impact = self.ser.readline().decode().strip()
-            gyro = self.ser.readline().decode().strip()
-            orientation = self.ser.readline().decode().strip()
-            confidence = self.ser.readline().decode().strip()
+            except Exception as e:
+                print("Read Error:", e)
+                return
 
-            print(impact)
-            print(gyro)
-            print(orientation)
-            print(confidence)
+            if line != "FALL_DETECTED":
+                continue
 
-            self.impact_g = float(impact.split("=")[1])
-            self.gyro_peak_dps = float(gyro.split("=")[1])
-            self.orientation_change_deg = float(orientation.split("=")[1])
-            self.confidence = int(confidence.split("=")[1])
+            try:
+                impact = self.ser.readline().decode(
+                    "utf-8", errors="ignore"
+                ).strip()
 
-            self.fall_detected = True
+                gyro = self.ser.readline().decode(
+                    "utf-8", errors="ignore"
+                ).strip()
 
-        except Exception as e:
-            print("Parsing Error:", e)
+                orientation = self.ser.readline().decode(
+                    "utf-8", errors="ignore"
+                ).strip()
+
+                confidence = self.ser.readline().decode(
+                    "utf-8", errors="ignore"
+                ).strip()
+
+                print(impact)
+                print(gyro)
+                print(orientation)
+                print(confidence)
+
+                self.impact_g = float(impact.split("=")[1])
+                self.gyro_peak_dps = float(gyro.split("=")[1])
+                self.orientation_change_deg = float(
+                    orientation.split("=")[1]
+                )
+                self.confidence = int(confidence.split("=")[1])
+
+                self.fall_detected = True
+                return
+
+            except Exception as e:
+                print("Parsing Error:", e)
+                return
 
     def reset(self):
         self.fall_detected = False
@@ -61,7 +86,7 @@ class SensorFallDetector:
 
 if __name__ == "__main__":
 
-    PORT = "COM9"      # Change if needed
+    PORT = "COM9"
 
     sensor = SensorFallDetector(PORT)
 
@@ -69,17 +94,21 @@ if __name__ == "__main__":
 
     try:
         while True:
+
             sensor.check_for_fall()
 
             if sensor.fall_detected:
-                print("\n===== FALL DETECTED =====")
-                print(f"Impact: {sensor.impact_g} g")
-                print(f"Gyro Peak: {sensor.gyro_peak_dps} dps")
-                print(f"Orientation Change: {sensor.orientation_change_deg}°")
-                print(f"Confidence: {sensor.confidence}%")
-                print("=========================\n")
+
+                print("\n========== FALL DETECTED ==========")
+                print(f"Impact              : {sensor.impact_g:.2f} g")
+                print(f"Gyro Peak           : {sensor.gyro_peak_dps:.2f} dps")
+                print(f"Orientation Change  : {sensor.orientation_change_deg:.2f}°")
+                print(f"Confidence          : {sensor.confidence}%")
+                print("===================================\n")
 
                 sensor.reset()
+
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
         sensor.ser.close()
