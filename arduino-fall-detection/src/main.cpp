@@ -1,38 +1,44 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+/* ---------------- MPU6050 configuration ---------------- */
+
 const byte MPU = 0x68;
 const byte ACCEL_XOUT_H = 0x3B;
-const float ACCEL_SCALE = 4096.0f;  // ±8 g, configured by register 0x1C.
-const float GYRO_SCALE = 65.5f;     // ±500 dps, configured by register 0x1B.
+
+const float ACCEL_SCALE = 4096.0f;  // ±8 g
+const float GYRO_SCALE = 65.5f;     // ±500 dps
 
 const unsigned long SAMPLE_TIME = 20;
 const unsigned long PRINT_TIME = 1000;
 const unsigned long PAUSE_TIME = 10000;
 
-/*
-  -------------------- Fall-detection tuning constants --------------------
-
-  Tune these after collecting serial data with the MPU at the intended
-  location. The defaults are deliberately placement-independent: they use
-  vector magnitudes and gravity-vector orientation, not a particular axis.
+/* ---------------- Ultra-sensitive thresholds ----------------
+   Lowering these further will make normal daily movement look like a fall.
 */
-const float MOTION_ACCEL_TRIGGER = 1.70f;  // Starts an event window.
-const float MOTION_GYRO_TRIGGER = 100.0f;  // Starts an event window (dps).
 
-const float IMPACT_LIMIT = 2.20f;          // Required impact peak (g).
-const float GYRO_PEAK_LIMIT = 120.0f;      // Required angular-rate peak (dps).
-const float ORIENTATION_LIMIT = 45.0f;     // Required net posture change (deg).
+const float MOTION_ACCEL_TRIGGER = 1.10f;
+const float MOTION_GYRO_TRIGGER = 30.0f;
 
-const float STILL_ACCEL_MIN = 0.75f;       // Acceleration magnitude near 1 g.
-const float STILL_ACCEL_MAX = 1.25f;
-const float STILL_GYRO_LIMIT = 35.0f;      // Near-still angular motion (dps).
+const float IMPACT_LIMIT = 1.20f;
+const float GYRO_PEAK_LIMIT = 40.0f;
+const float ORIENTATION_LIMIT = 12.0f;
 
-const unsigned long EVENT_WINDOW = 700;    // Time allowed to collect impact + rotation.
-const unsigned long STILL_CONFIRM_TIME = 1200; // Continuous inactivity after impact.
-const unsigned long POST_IMPACT_TIMEOUT = 6000; // Reject event if no settled posture.
+const float STILL_ACCEL_MIN = 0.55f;
+const float STILL_ACCEL_MAX = 1.45f;
+const float STILL_GYRO_LIMIT = 70.0f;
 
-const float POSTURE_FILTER = 0.15f;        // Gravity-vector smoothing during stillness.
+const float REFERENCE_ACCEL_MIN = 0.75f;
+const float REFERENCE_ACCEL_MAX = 1.25f;
+const float REFERENCE_GYRO_LIMIT = 35.0f;
+
+const unsigned long EVENT_WINDOW = 1400;
+const unsigned long STILL_CONFIRM_TIME = 400;
+const unsigned long POST_IMPACT_TIMEOUT = 7000;
+
+const float POSTURE_FILTER = 0.18f;
+
+/* ---------------- State machine ---------------- */
 
 enum FallState {
   NORMAL,
@@ -56,17 +62,12 @@ float gyroOffsetZ = 0;
 
 float impactG = 0;
 float gyroPeak = 0;
-float rotation = 0;  // Net gravity-vector orientation change, in degrees.
+float orientationChange = 0;
 
-/*
-  Reference posture is the filtered gravity direction before the event.
-  It works on chest, waist, and upper-arm mounting because it compares
-  directions relative to the sensor's own initial orientation.
-*/
+/* Pre-fall and post-fall gravity directions. */
 float normalGX = 0;
 float normalGY = 0;
 float normalGZ = 1;
-bool haveNormalPosture = false;
 
 float referenceGX = 0;
 float referenceGY = 0;
@@ -75,6 +76,8 @@ float referenceGZ = 1;
 float postGX = 0;
 float postGY = 0;
 float postGZ = 1;
+
+bool haveNormalPosture = false;
 bool havePostPosture = false;
 
 unsigned long lastSample = 0;
@@ -82,6 +85,8 @@ unsigned long lastPrint = 0;
 unsigned long stateSince = 0;
 unsigned long stillSince = 0;
 unsigned long pauseUntil = 0;
+
+/* ---------------- Sensor helpers ---------------- */
 
 int16_t read16(byte high, byte low) {
   return (int16_t)(((uint16_t)high << 8) | low);
@@ -160,7 +165,8 @@ void calibrateGyro() {
   Serial.println(F("Gyro calibration complete."));
 }
 
-/* Normalize a 3-axis gravity vector. */
+/* ---------------- Orientation helpers ---------------- */
+
 void normalizeVector(float &x, float &y, float &z) {
   float length = sqrt(x * x + y * y + z * z);
 
@@ -171,12 +177,10 @@ void normalizeVector(float &x, float &y, float &z) {
   }
 }
 
-/*
-  Update a low-pass gravity direction only during calm periods.
-  Dynamic acceleration is not used as orientation because it is distorted
-  during impacts, walking, and arm swings.
-*/
+/* Smooth gravity direction only after acceleration is close to 1 g. */
 void updatePosture(const Reading &r, float &x, float &y, float &z) {
+  if (r.accel < 0.1f) return;
+
   float nx = r.ax / r.accel;
   float ny = r.ay / r.accel;
   float nz = r.az / r.accel;
@@ -184,11 +188,11 @@ void updatePosture(const Reading &r, float &x, float &y, float &z) {
   x += POSTURE_FILTER * (nx - x);
   y += POSTURE_FILTER * (ny - y);
   z += POSTURE_FILTER * (nz - z);
+
   normalizeVector(x, y, z);
 }
 
-/* Calculate angle between the pre-event and post-event gravity directions. */
-float postureAngleDegrees() {
+float calculateOrientationChange() {
   float dot = referenceGX * postGX +
               referenceGY * postGY +
               referenceGZ * postGZ;
@@ -199,57 +203,67 @@ float postureAngleDegrees() {
   return acos(dot) * 57.29578f;
 }
 
+bool isStill(const Reading &r) {
+  return r.accel >= STILL_ACCEL_MIN &&
+         r.accel <= STILL_ACCEL_MAX &&
+         r.gyro <= STILL_GYRO_LIMIT;
+}
+
+bool isReferenceSample(const Reading &r) {
+  return r.accel >= REFERENCE_ACCEL_MIN &&
+         r.accel <= REFERENCE_ACCEL_MAX &&
+         r.gyro <= REFERENCE_GYRO_LIMIT;
+}
+
+/* ---------------- Output ---------------- */
+
 void resetFallData() {
   impactG = 0;
   gyroPeak = 0;
-  rotation = 0;
+  orientationChange = 0;
   stillSince = 0;
   havePostPosture = false;
 }
 
-/*
-  Confidence is based only on measured strength above each required gate.
-  The base 40 points reflect that all four mandatory conditions passed.
-*/
 int calculateConfidence(unsigned long stillDuration) {
-  float impactScore = (impactG - IMPACT_LIMIT) / (4.50f - IMPACT_LIMIT);
-  float gyroScore = (gyroPeak - GYRO_PEAK_LIMIT) / (300.0f - GYRO_PEAK_LIMIT);
-  float angleScore = (rotation - ORIENTATION_LIMIT) / (90.0f - ORIENTATION_LIMIT);
-  float stillScore = ((float)stillDuration - STILL_CONFIRM_TIME) /
-                     (2500.0f - STILL_CONFIRM_TIME);
+  float impactScore = (impactG - IMPACT_LIMIT) / 2.8f;
+  float gyroScore = (gyroPeak - GYRO_PEAK_LIMIT) / 200.0f;
+  float orientationScore = (orientationChange - ORIENTATION_LIMIT) / 63.0f;
+  float stillScore = ((float)stillDuration - STILL_CONFIRM_TIME) / 1600.0f;
 
   if (impactScore < 0) impactScore = 0;
   if (gyroScore < 0) gyroScore = 0;
-  if (angleScore < 0) angleScore = 0;
+  if (orientationScore < 0) orientationScore = 0;
   if (stillScore < 0) stillScore = 0;
 
   if (impactScore > 1) impactScore = 1;
   if (gyroScore > 1) gyroScore = 1;
-  if (angleScore > 1) angleScore = 1;
+  if (orientationScore > 1) orientationScore = 1;
   if (stillScore > 1) stillScore = 1;
 
   int confidence = 40 +
                    (int)(impactScore * 20.0f) +
                    (int)(gyroScore * 15.0f) +
-                   (int)(angleScore * 15.0f) +
+                   (int)(orientationScore * 15.0f) +
                    (int)(stillScore * 10.0f);
 
   if (confidence > 100) confidence = 100;
   return confidence;
 }
 
-/*
-  Keep this output exactly five lines so an existing Python listener can
-  continue matching FALL_DETECTED without any protocol changes.
-*/
+/* Exact output labels retained for the Python program. */
 void printFall(unsigned long stillDuration) {
   Serial.println(F("FALL_DETECTED"));
+
   Serial.print(F("Impact="));
   Serial.println(impactG, 2);
+
   Serial.print(F("GyroPeak="));
   Serial.println(gyroPeak, 1);
+
   Serial.print(F("OrientationChange="));
-  Serial.println(rotation, 1);
+  Serial.println(orientationChange, 1);
+
   Serial.print(F("Confidence="));
   Serial.println(calculateConfidence(stillDuration));
 }
@@ -270,35 +284,30 @@ void printReading(const Reading &r) {
   Serial.println(r.gz, 1);
 }
 
-void checkFall(const Reading &r, unsigned long now) {
-  /*
-    Establish a posture reference only when the wearer is relatively calm.
-    This avoids learning walking, arm-swing, or impact acceleration as tilt.
-  */
-  bool quietForReference =
-    r.accel >= STILL_ACCEL_MIN &&
-    r.accel <= STILL_ACCEL_MAX &&
-    r.gyro <= STILL_GYRO_LIMIT;
+/* ---------------- Fall detection ---------------- */
 
-  if (state == NORMAL && quietForReference) {
-    if (!haveNormalPosture) {
-      normalGX = r.ax / r.accel;
-      normalGY = r.ay / r.accel;
-      normalGZ = r.az / r.accel;
-      haveNormalPosture = true;
-    } else {
-      updatePosture(r, normalGX, normalGY, normalGZ);
-    }
+void checkFall(const Reading &r, unsigned long now) {
+  /* Initialize and continuously improve the pre-fall posture reference. */
+  if (!haveNormalPosture && r.accel > 0.1f) {
+    normalGX = r.ax / r.accel;
+    normalGY = r.ay / r.accel;
+    normalGZ = r.az / r.accel;
+    normalizeVector(normalGX, normalGY, normalGZ);
+    haveNormalPosture = true;
+  }
+
+  if (state == NORMAL && isReferenceSample(r)) {
+    updatePosture(r, normalGX, normalGY, normalGZ);
   }
 
   switch (state) {
     case NORMAL:
       /*
-        Either a moderate acceleration change or fast rotation opens a short
-        candidate window. This does not require free fall.
+        No free-fall requirement. Low acceleration or gyro thresholds make
+        this version sensitive to slow falls and cushioned impacts.
       */
-      if (haveNormalPosture &&
-          (r.accel >= MOTION_ACCEL_TRIGGER || r.gyro >= MOTION_GYRO_TRIGGER)) {
+      if (r.accel >= MOTION_ACCEL_TRIGGER ||
+          r.gyro >= MOTION_GYRO_TRIGGER) {
         resetFallData();
 
         impactG = r.accel;
@@ -314,14 +323,12 @@ void checkFall(const Reading &r, unsigned long now) {
       break;
 
     case POSSIBLE_FALL_MOTION:
-      /*
-        A real candidate must show both a distinct impact and angular motion
-        within EVENT_WINDOW. This filters ordinary bending and most walking.
-      */
+      /* Record the largest impact and rotation in the candidate window. */
       if (r.accel > impactG) impactG = r.accel;
       if (r.gyro > gyroPeak) gyroPeak = r.gyro;
 
-      if (impactG >= IMPACT_LIMIT && gyroPeak >= GYRO_PEAK_LIMIT) {
+      if (impactG >= IMPACT_LIMIT &&
+          gyroPeak >= GYRO_PEAK_LIMIT) {
         stateSince = now;
         state = IMPACT_DETECTED;
       } else if (now - stateSince > EVENT_WINDOW) {
@@ -330,45 +337,39 @@ void checkFall(const Reading &r, unsigned long now) {
       break;
 
     case IMPACT_DETECTED:
-      /*
-        Start looking for a settled post-impact posture on the next sample.
-        Separating this state keeps the event sequence explicit.
-      */
+      /* Wait for the motion caused by the impact to settle. */
       stillSince = 0;
       havePostPosture = false;
       stateSince = now;
       state = POST_IMPACT_MONITORING;
       break;
 
-    case POST_IMPACT_MONITORING: {
-      /*
-        The person must become still after impact. Sitting, running, and
-        deliberate lying down normally continue moving or lack the impact
-        and angular-velocity combination required above.
-      */
+    case POST_IMPACT_MONITORING:
       if (r.accel > impactG) impactG = r.accel;
       if (r.gyro > gyroPeak) gyroPeak = r.gyro;
 
-      bool still =
-        r.accel >= STILL_ACCEL_MIN &&
-        r.accel <= STILL_ACCEL_MAX &&
-        r.gyro <= STILL_GYRO_LIMIT;
-
-      if (still) {
+      if (isStill(r)) {
         if (stillSince == 0) {
           stillSince = now;
+
           postGX = r.ax / r.accel;
           postGY = r.ay / r.accel;
           postGZ = r.az / r.accel;
+          normalizeVector(postGX, postGY, postGZ);
+
           havePostPosture = true;
         } else {
           updatePosture(r, postGX, postGY, postGZ);
         }
 
-        rotation = postureAngleDegrees();
+        orientationChange = calculateOrientationChange();
 
+        /*
+          Confirm the fall only after a changed posture and short period
+          of post-impact inactivity.
+        */
         if (now - stillSince >= STILL_CONFIRM_TIME) {
-          if (rotation >= ORIENTATION_LIMIT) {
+          if (orientationChange >= ORIENTATION_LIMIT) {
             printFall(now - stillSince);
             pauseUntil = now + PAUSE_TIME;
           }
@@ -376,7 +377,6 @@ void checkFall(const Reading &r, unsigned long now) {
           state = NORMAL;
         }
       } else {
-        /* Motion resumed: require a new continuous inactivity interval. */
         stillSince = 0;
         havePostPosture = false;
       }
@@ -385,20 +385,22 @@ void checkFall(const Reading &r, unsigned long now) {
         state = NORMAL;
       }
       break;
-    }
   }
 }
 
+/* ---------------- Arduino entry points ---------------- */
+
 void setup() {
   Serial.begin(115200);
+
   Wire.begin();
   Wire.setClock(400000);
 
-  writeRegister(0x6B, 0x00);
+  writeRegister(0x6B, 0x00);  // Wake MPU6050.
   delay(100);
 
-  writeRegister(0x1C, 0x10); // Accelerometer: ±8 g.
-  writeRegister(0x1B, 0x08); // Gyroscope: ±500 dps.
+  writeRegister(0x1C, 0x10);  // Accelerometer ±8 g.
+  writeRegister(0x1B, 0x08);  // Gyroscope ±500 dps.
   delay(50);
 
   calibrateGyro();
